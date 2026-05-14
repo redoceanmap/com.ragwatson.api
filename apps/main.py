@@ -1,7 +1,11 @@
-from fastapi import FastAPI, Response
+from fastapi import Depends, FastAPI, Response
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 import json
 
-app = FastAPI(title="Redoceanmap Main Page")
+from database import get_db
+
+app = FastAPI(title="RagWatson Agora Main Page")
 
 from titanic.app.james_controller import JamesController
 from doro.app.doro_director import DoroDiretor
@@ -62,6 +66,16 @@ def read_doro_data():
     df = doro_director.get_data() 
     
     return df.to_dict(orient="records")
+
+@app.get("/db-check")
+async def check_db(db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(text("SELECT NOW();"))
+        now = result.scalar()
+        return {"status": "success", "neon_time": str(now)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 
 if __name__ == "__main__":
     import uvicorn
