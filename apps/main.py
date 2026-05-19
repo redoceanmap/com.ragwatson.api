@@ -6,7 +6,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 import httpx
 
-from fastapi import Depends, FastAPI, Response
+from fastapi import Depends, FastAPI, HTTPException, Response
+from sqlalchemy.exc import IntegrityError
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +15,7 @@ import json
 from pydantic import BaseModel
 from database import get_db
 from matrix.app.keymaker import get_keymaker, GEMINI_MODEL
-from secom.app.schemas.user_schema import UserSchema
+from secom.app.schemas.user_schema import UserSchema, LoginSchema
 from secom.app.controllers.user_controller import UserController
 
 logger = logging.getLogger("uvicorn.error")
@@ -58,32 +59,34 @@ async def chat(req: ChatRequest):
 
 
 # 회원가입
-class SignupRequest(BaseModel):
-    userId: str
-    password: str
-    nickname: str
-    email: str
-
-
 @app.post("/signup")
-async def signup(req: SignupRequest):
+async def signup(req: UserSchema, db: AsyncSession = Depends(get_db)):
     logger.info(
         "회원가입 요청 수신 — 아이디: %s / 닉네임: %s / 이메일: %s",
         req.userId, req.nickname, req.email,
     )
 
-    user_schema = UserSchema(
-        userId=req.userId,
-        password=req.password,
-        nickname=req.nickname,
-        email=req.email,
-        role="user",
-    )
+    user_controller = UserController()
+    try:
+        user = await user_controller.save_user(db, req)
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail="이미 사용 중인 이메일입니다.")
+
+    return {"message": "회원가입 완료", "userId": user.user_id, "nickname": user.nickname, "email": user.email}
+
+
+# 로그인
+@app.post("/login")
+async def login(req: LoginSchema, db: AsyncSession = Depends(get_db)):
+    logger.info("로그인 요청 수신 — 이메일: %s", req.email)
 
     user_controller = UserController()
-    user_controller.save_user(user_schema)
+    user = await user_controller.login_user(db, req)
 
-    return {"message": "회원가입 요청을 받았습니다.", "userId": req.userId, "nickname": req.nickname, "email": req.email}
+    if user is None:
+        return {"error": "이메일 또는 비밀번호가 잘못되었습니다."}
+
+    return {"access_token": "mock-token", "email": user.email, "name": user.nickname}
 
 
 @app.get("/weather")
@@ -159,6 +162,15 @@ def read_doro_data():
     df = doro_director.get_data() 
     
     return df.to_dict(orient="records")
+
+@app.get("/check-email")
+async def check_email(email: str, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select
+    from secom.app.models.user_model import UserModel
+    result = await db.execute(select(UserModel).where(UserModel.email == email))
+    user = result.scalars().first()
+    return {"available": user is None}
+
 
 @app.get("/db-check")
 async def check_db(db: AsyncSession = Depends(get_db)):
